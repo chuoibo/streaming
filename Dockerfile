@@ -1,10 +1,9 @@
-FROM python:3.11-slim
+ARG BASE_IMAGE=python:3.10.14-slim-bullseye
+FROM ${BASE_IMAGE}
 
-# Use key=value format for ENV
 ENV HOST=0.0.0.0
 ENV PORT=8000
 ENV DEBUG=True
-ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
@@ -20,6 +19,5 @@ COPY backend/app.py ./backend/
 COPY frontend/ ./frontend/
 COPY .env .
 
-EXPOSE 8000
-
-CMD ["uvicorn", "backend.app:app", "--host", "${HOST}", "--port", "${PORT}"]
+EXPOSE ${PORT}
+CMD ["sh", "-c", "uvicorn backend.app:app --host ${HOST} --port ${PORT}"]

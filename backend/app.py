@@ -1,4 +1,5 @@
 import asyncio
+import uvicorn
 import os
 import json
 from fastapi import FastAPI, Query
@@ -74,7 +75,7 @@ def gemini_text_generator(query: str):
         yield buffer.strip()
 
 async def text_to_speech_stream(query: str):
-    voice = "en-GB-SoniaNeural"
+    voice = "vi-VN-HoaiMyNeural"
     
     gen_text = gemini_text_generator(query)
     

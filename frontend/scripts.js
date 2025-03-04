@@ -20,7 +20,7 @@ function startStreaming() {
         return;
     }
 
-    eventSource = new EventSource(`http://127.0.0.1:8000/stream-tts?query=${query}`);
+    eventSource = new EventSource(`${window.location.origin}/stream-tts?query=${query}`);
 
     eventSource.onopen = () => {
         console.log('EventSource connected');
