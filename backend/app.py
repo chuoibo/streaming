@@ -11,10 +11,12 @@ import re
 import time
 from io import BytesIO
 from dotenv import load_dotenv
+from fastapi.staticfiles import StaticFiles
 
 load_dotenv()
 
 app = FastAPI()
+app.mount("/frontend", StaticFiles(directory="frontend", html=True), name="frontend")
 
 app.add_middleware(
     CORSMiddleware,
@@ -108,7 +110,3 @@ async def text_to_speech_stream(query: str):
 @app.get("/stream-tts")
 async def stream_tts(query: str = Query(..., description="The query to process")):
     return StreamingResponse(text_to_speech_stream(query), media_type="text/event-stream")
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8000)
