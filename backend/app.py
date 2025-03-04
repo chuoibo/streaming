@@ -1,13 +1,14 @@
 import asyncio
 import os
 import json
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from google import genai
 from pydub import AudioSegment
 import edge_tts
 import re
+import time
 from io import BytesIO
 from dotenv import load_dotenv
 
@@ -34,7 +35,7 @@ def incomplete_abbreviation(last_word, abbreviations):
             return True
     return False
 
-def gemini_text_generator():
+def gemini_text_generator(query: str):
     client = genai.Client(api_key=os.getenv('GOOGLE_API_KEY'), vertexai=False)
     chat = client.chats.create(model="gemini-2.0-flash-001")
     
@@ -42,7 +43,7 @@ def gemini_text_generator():
     pattern = re.compile(r'\.\s*')
     
     buffer = ""
-    for chunk in chat.send_message_stream("Explain Transformers architecture"):
+    for chunk in chat.send_message_stream(query):
         clean_text = chunk.text.replace("*", "")
         buffer += clean_text
         
@@ -70,12 +71,14 @@ def gemini_text_generator():
     if buffer.strip():
         yield buffer.strip()
 
-async def text_to_speech_stream():
+async def text_to_speech_stream(query: str):
     voice = "en-GB-SoniaNeural"
     
-    gen_text = gemini_text_generator()
+    gen_text = gemini_text_generator(query)
     
+    total_duration = 0
     for chunk in gen_text:
+        start_time_chunk = time.time()
         communicate = edge_tts.Communicate(chunk, voice)
         audio_data = bytearray()
         async for tts_chunk in communicate.stream():
@@ -84,19 +87,27 @@ async def text_to_speech_stream():
         
         audio_segment = AudioSegment.from_mp3(BytesIO(audio_data))
         duration_seconds = len(audio_segment) / 1000.0  
+        processing_time = time.time() - start_time_chunk
+
+        sleep_time = max(0, duration_seconds - processing_time)
         
         data = {
             "text": chunk,
             "audio": audio_data.hex(),
-            "duration": duration_seconds - 1.5  
+            "duration": sleep_time
         }
         yield f"event: ttsUpdate\ndata: {json.dumps(data)}\n\n"
         
-        await asyncio.sleep(duration_seconds - 1.5)
+        await asyncio.sleep(sleep_time)
+    
+    final_delay = max(0, total_duration)
+    if final_delay > 0:
+        yield f"event: ttsEnd\ndata: {json.dumps({'message': 'TTS completed', 'delay': final_delay})}\n\n"
+        await asyncio.sleep(final_delay)
 
 @app.get("/stream-tts")
-async def stream_tts():
-    return StreamingResponse(text_to_speech_stream(), media_type="text/event-stream")
+async def stream_tts(query: str = Query(..., description="The query to process")):
+    return StreamingResponse(text_to_speech_stream(query), media_type="text/event-stream")
 
 if __name__ == "__main__":
     import uvicorn
