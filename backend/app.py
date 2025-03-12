@@ -78,10 +78,10 @@ async def text_to_speech_stream(query: str):
     
     gen_text = gemini_text_generator(query)
     
-    total_duration = 0
     for chunk in gen_text:
         if not chunk or not chunk.strip():
-            continue
+            break
+        
         start_time_chunk = time.time()
         communicate = edge_tts.Communicate(chunk, voice)
         audio_data = bytearray()
@@ -104,10 +104,6 @@ async def text_to_speech_stream(query: str):
         
         await asyncio.sleep(sleep_time)
     
-    final_delay = max(0, total_duration)
-    if final_delay > 0:
-        yield f"event: ttsEnd\ndata: {json.dumps({'message': 'TTS completed', 'delay': final_delay})}\n\n"
-        await asyncio.sleep(final_delay)
 
 @app.get("/stream-tts")
 async def stream_tts(query: str = Query(..., description="The query to process")):
