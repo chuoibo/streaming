@@ -80,7 +80,7 @@ async def text_to_speech_stream(query: str):
     
     total_duration = 0
     for chunk in gen_text:
-        if not chunk or not chunk.stript():
+        if not chunk or not chunk.strip():
             continue
         start_time_chunk = time.time()
         communicate = edge_tts.Communicate(chunk, voice)
