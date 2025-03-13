@@ -11,7 +11,16 @@ import re
 import time
 from io import BytesIO
 from dotenv import load_dotenv
+import uvicorn
 from fastapi.staticfiles import StaticFiles
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    handlers=[logging.StreamHandler()]
+)
+logger = logging.getLogger('tts_server')
 
 load_dotenv()
 
@@ -26,49 +35,43 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-def get_last_word(text):
-    matches = re.findall(r'[\w.]+', text)
-    return matches[-1] if matches else ""
-
-def incomplete_abbreviation(last_word, abbreviations):
-    last_word_lower = last_word.lower()
-    for abbr in abbreviations:
-        if abbr.startswith(last_word_lower) and last_word_lower != abbr:
-            return True
-    return False
+def preprocess_text(text):    
+    text = re.sub(r'\bunk\b', '', text)
+    return text
 
 def gemini_text_generator(query: str):
+    # Start timing when Gemini receives the query
+    start_time = time.time()
+    
     client = genai.Client(api_key=os.getenv('GOOGLE_API_KEY'), vertexai=False)
     chat = client.chats.create(model="gemini-2.0-flash-001")
     
-    abbreviations = {"e.g.", "i.e.", "w.r.t.", "etc."}
-    pattern = re.compile(r'\.\s*')
+    pattern = re.compile(r'[.!?:]\s*')
+    
+    preprocess_query = preprocess_text(query)
     
     buffer = ""
-    for chunk in chat.send_message_stream(query):
+    first_chunk_received = False
+    
+    for chunk in chat.send_message_stream(preprocess_query):
+        if not first_chunk_received:
+            first_chunk_time = time.time()
+            elapsed_time = first_chunk_time - start_time
+            first_chunk_received = True
+            logging.info(f"Time to generate first text chunk: {elapsed_time:.3f} seconds")
+        
         clean_text = chunk.text.replace("*", "")
         buffer += clean_text
         
         while True:
-            all_matches = list(pattern.finditer(buffer))
-            if not all_matches:
-                break
+            match = pattern.search(buffer)
             
-            selected_match = None
-            for m in all_matches:
-                candidate_sentence = buffer[:m.end()].strip()
-                last_word = get_last_word(candidate_sentence)
-                if not incomplete_abbreviation(last_word, abbreviations):
-                    selected_match = m
-                    break
-            
-            if selected_match is None:
-                break
-            
-            sentence = buffer[:selected_match.end()].strip()
-            if sentence:
+            if match:
+                sentence = buffer[:match.end()].strip()
                 yield sentence
-            buffer = buffer[selected_match.end():]
+                buffer = buffer[match.end():]
+            else:
+                break
     
     if buffer.strip():
         yield buffer.strip()
@@ -76,35 +79,52 @@ def gemini_text_generator(query: str):
 async def text_to_speech_stream(query: str):
     voice = "vi-VN-HoaiMyNeural"
     
+    # Start timing for voice generation
+    voice_start_time = time.time()
+    
+    first_audio_sent = False
+    
     gen_text = gemini_text_generator(query)
     
-    for chunk in gen_text:
-        if not chunk or not chunk.strip():
-            break
+    for sentence in gen_text:
+        if not sentence or not sentence.strip():
+            continue
         
-        start_time_chunk = time.time()
-        communicate = edge_tts.Communicate(chunk, voice)
+        communicate = edge_tts.Communicate(sentence, voice)
         audio_data = bytearray()
+        
         async for tts_chunk in communicate.stream():
             if tts_chunk["type"] == "audio":
                 audio_data.extend(tts_chunk["data"])
         
         audio_segment = AudioSegment.from_mp3(BytesIO(audio_data))
-        duration_seconds = len(audio_segment) / 1000.0  
-        processing_time = time.time() - start_time_chunk
-
+        duration_seconds = len(audio_segment) / 1000.0
+        
+        # Log only for the first sentence
+        if not first_audio_sent:
+            first_audio_time = time.time()
+            elapsed_time = first_audio_time - voice_start_time
+            first_audio_sent = True
+            logging.info(f"Time to generate first voice chunk: {elapsed_time:.3f} seconds")
+        
+        # Calculate sleep time
+        processing_time = time.time() - first_audio_time if first_audio_sent else 0
         sleep_time = max(0, duration_seconds - processing_time)
         
+        # Send the data
         data = {
-            "text": chunk,
+            "text": sentence,
             "audio": audio_data.hex(),
             "duration": sleep_time
         }
         yield f"event: ttsUpdate\ndata: {json.dumps(data)}\n\n"
         
+        # Sleep to simulate real-time audio playback
         await asyncio.sleep(sleep_time)
-    
 
 @app.get("/stream-tts")
 async def stream_tts(query: str = Query(..., description="The query to process")):
     return StreamingResponse(text_to_speech_stream(query), media_type="text/event-stream")
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)
