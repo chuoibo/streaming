@@ -40,9 +40,7 @@ def preprocess_text(text):
     return text
 
 def gemini_text_generator(query: str):
-    # Start timing when Gemini receives the query
-    start_time = time.time()
-    
+    logging.info(f"Received query: {query}")
     client = genai.Client(api_key=os.getenv('GOOGLE_API_KEY'), vertexai=False)
     chat = client.chats.create(model="gemini-2.0-flash-001")
     
@@ -51,15 +49,8 @@ def gemini_text_generator(query: str):
     preprocess_query = preprocess_text(query)
     
     buffer = ""
-    first_chunk_received = False
     
     for chunk in chat.send_message_stream(preprocess_query):
-        if not first_chunk_received:
-            first_chunk_time = time.time()
-            elapsed_time = first_chunk_time - start_time
-            first_chunk_received = True
-            logging.info(f"Time to generate first text chunk: {elapsed_time:.3f} seconds")
-        
         clean_text = chunk.text.replace("*", "")
         buffer += clean_text
         
@@ -79,48 +70,37 @@ def gemini_text_generator(query: str):
 async def text_to_speech_stream(query: str):
     voice = "vi-VN-HoaiMyNeural"
     
-    # Start timing for voice generation
-    voice_start_time = time.time()
-    
-    first_audio_sent = False
-    
     gen_text = gemini_text_generator(query)
     
-    for sentence in gen_text:
-        if not sentence or not sentence.strip():
+    for chunk in gen_text:
+        
+        if not chunk or not chunk.strip():
             continue
         
-        communicate = edge_tts.Communicate(sentence, voice)
+        start_time_chunk = time.time()
+        communicate = edge_tts.Communicate(chunk, voice)
         audio_data = bytearray()
-        
         async for tts_chunk in communicate.stream():
             if tts_chunk["type"] == "audio":
                 audio_data.extend(tts_chunk["data"])
+    
         
         audio_segment = AudioSegment.from_mp3(BytesIO(audio_data))
         duration_seconds = len(audio_segment) / 1000.0
+ 
+        processing_time = time.time() - start_time_chunk
         
-        # Log only for the first sentence
-        if not first_audio_sent:
-            first_audio_time = time.time()
-            elapsed_time = first_audio_time - voice_start_time
-            first_audio_sent = True
-            logging.info(f"Time to generate first voice chunk: {elapsed_time:.3f} seconds")
-        
-        # Calculate sleep time
-        processing_time = time.time() - first_audio_time if first_audio_sent else 0
         sleep_time = max(0, duration_seconds - processing_time)
         
-        # Send the data
         data = {
-            "text": sentence,
+            "text": chunk,
             "audio": audio_data.hex(),
             "duration": sleep_time
         }
         yield f"event: ttsUpdate\ndata: {json.dumps(data)}\n\n"
         
-        # Sleep to simulate real-time audio playback
         await asyncio.sleep(sleep_time)
+ 
 
 @app.get("/stream-tts")
 async def stream_tts(query: str = Query(..., description="The query to process")):
